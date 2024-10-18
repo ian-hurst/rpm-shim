@@ -13,7 +13,7 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
-from typing import List
+from typing import Any, List
 
 PROJECT_NAME = "rpm-shim"
 MODULE_NAME = "rpm"
@@ -25,7 +25,7 @@ class ShimAlreadyInitializingError(Exception):
     pass
 
 
-def get_system_sitepackages() -> List[List[str]]:
+def get_system_sitepackages() -> List[List[Any]]:
     """
     Gets a list of sitepackages directories of system Python interpreter(s).
 
@@ -44,14 +44,10 @@ def get_system_sitepackages() -> List[List[str]]:
 
     def get_suffixes(interpreter):
         print_suffixes = [
-            'import json, importlib.machinery',
-            'print(json.dumps(importlib.machinery.EXTENSION_SUFFIXES))',
+            "import json, importlib.machinery",
+            "print(json.dumps(importlib.machinery.EXTENSION_SUFFIXES))",
         ]
-        command = [
-            interpreter,
-            '-c',
-            ';'.join(print_suffixes)
-        ]
+        command = [interpreter, "-c", ";".join(print_suffixes)]
         output = subprocess.check_output(command)
         return json.loads(output.decode())
 
@@ -69,12 +65,14 @@ def get_system_sitepackages() -> List[List[str]]:
         sitepackages = get_sitepackages(interpreter)
         suffixes = get_suffixes(interpreter)
         formatted_list = "\n".join(sitepackages + suffixes)
-        logger.debug(f"Collected sitepackages, suffixes for {interpreter}:\n{formatted_list}")
+        logger.debug(
+            f"Collected sitepackages, suffixes for {interpreter}:\n{formatted_list}"
+        )
         result.append([sitepackages, suffixes])
     return result
 
 
-def try_path(path: str, suffixes: List) -> bool:
+def try_path(path: str, suffixes: List[str]) -> bool:
     """
     Tries to load system RPM module from the specified path.
 
@@ -110,8 +108,13 @@ def import_helper(path: Path, suffixes: List) -> None:
     try:
         importlib.reload(sys.modules[__name__])
     except ModuleNotFoundError as e:
-        logger.debug(f"Failed to import {e.name} from {path}, looking for extensions with valid suffixes")
-        stem = path / e.name.split('.')[1]
+        if e.name is None:
+            raise
+        logger.debug(
+            f"Failed to import {e.name} from {path}, "
+            "looking for extensions with valid suffixes"
+        )
+        stem = path / e.name.split(".")[1]
         for suffix in suffixes:
             so = Path(str(stem) + suffix)
             logger.debug(f"Looking for {so}")
@@ -137,6 +140,10 @@ def load_module_by_path(module_name: str, path: Path) -> None:
     """
     logger.debug(f"importing {path} as {module_name}")
     spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None:
+        return
+    if spec.loader is None:
+        return
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
