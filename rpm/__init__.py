@@ -6,6 +6,7 @@ RPM shim module for use in virtualenvs
 """
 
 import importlib
+import importlib.util
 import json
 import logging
 import platform
@@ -41,6 +42,19 @@ def get_system_sitepackages() -> List[str]:
         output = subprocess.check_output(command)
         return json.loads(output.decode())
 
+    def get_suffixes(interpreter):
+        print_suffixes = [
+            'import json, importlib.machinery',
+            'print(json.dumps(importlib.machinery.EXTENSION_SUFFIXES))',
+        ]
+        command = [
+            interpreter,
+            '-c',
+            ';'.join(print_suffixes)
+        ]
+        output = subprocess.check_output(command)
+        return json.loads(output.decode())
+
     majorver, minorver, _ = platform.python_version_tuple()
     # try platform-python first (it could be the only interpreter present on the system)
     interpreters = [
@@ -53,24 +67,26 @@ def get_system_sitepackages() -> List[str]:
         if not Path(interpreter).is_file():
             continue
         sitepackages = get_sitepackages(interpreter)
-        formatted_list = "\n".join(sitepackages)
-        logger.debug(f"Collected sitepackages for {interpreter}:\n{formatted_list}")
-        result.extend(sitepackages)
+        suffixes = get_suffixes(interpreter)
+        formatted_list = "\n".join(sitepackages + suffixes)
+        logger.debug(f"Collected sitepackages, suffixes for {interpreter}:\n{formatted_list}")
+        result.append([sitepackages, suffixes])
     return result
 
 
-def try_path(path: str) -> bool:
+def try_path(path: str, suffixes: List) -> bool:
     """
     Tries to load system RPM module from the specified path.
 
     Returns:
         True if successful, False otherwise.
     """
-    if not (Path(path) / MODULE_NAME).is_dir():
+    module_path = Path(path) / MODULE_NAME
+    if not module_path.is_dir():
         return False
     sys.path.insert(0, path)
     try:
-        importlib.reload(sys.modules[__name__])
+        import_helper(module_path, suffixes)
         # sanity check
         confdir = sys.modules[__name__].expandMacro("%getconfdir")
         return Path(confdir).is_dir()
@@ -79,21 +95,68 @@ def try_path(path: str) -> bool:
     return False
 
 
+def import_helper(path: Path, suffixes: List) -> None:
+    """
+    Helps import rpm in cases where the shared object file extensions include the python
+    interpreter version
+
+    Args:
+        path (Path): the absolute path to the rpm module
+        suffixes (List): a list of extension suffixes valid for the python interpreter
+
+    Returns:
+        None
+    """
+    try:
+        importlib.reload(sys.modules[__name__])
+    except ModuleNotFoundError as e:
+        logger.debug(f"Failed to import {e.name} from {path}, looking for extensions with valid suffixes")
+        stem = path / e.name.split('.')[1]
+        for suffix in suffixes:
+            so = Path(str(stem) + suffix)
+            logger.debug(f"Looking for {so}")
+            if not so.exists():
+                continue
+            load_module_by_path(e.name, so)
+            importlib.reload(sys.modules[__name__])
+            return
+        else:
+            logger.debug(f"Give up on {path}")
+
+
+def load_module_by_path(module_name: str, path: Path) -> None:
+    """
+    Imports a python module by file path
+
+    Args:
+        module_name (str): name of the module to import
+        path (Path): absolute path to the module to import
+
+    Returns:
+        None
+    """
+    logger.debug(f"importing {path} as {module_name}")
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+
 def initialize() -> None:
     """
     Initializes the shim. Tries to load system RPM module and replace itself with it.
     """
-    for path in get_system_sitepackages():
-        logger.debug(f"Trying {path}")
-        try:
-            if try_path(path):
-                logger.debug("Import successfull")
-                return
-        except ShimAlreadyInitializingError:
-            continue
-        except Exception as e:
-            logger.debug(f"Exception: {type(e)}: {e}")
-            continue
+    for site_packages, suffixes in get_system_sitepackages():
+        for site in site_packages:
+            logger.debug(f"Trying {site}")
+            try:
+                if try_path(site, suffixes):
+                    logger.debug("Import successfull")
+                    return
+            except ShimAlreadyInitializingError:
+                continue
+            except Exception as e:
+                logger.debug(f"Exception: {type(e)}: {e}")
+                continue
     else:
         raise ImportError(
             "Failed to import system RPM module. "
