@@ -25,7 +25,7 @@ class ShimAlreadyInitializingError(Exception):
     pass
 
 
-def get_system_sitepackages() -> List[str]:
+def get_system_sitepackages() -> List[List[str]]:
     """
     Gets a list of sitepackages directories of system Python interpreter(s).
 
