@@ -119,10 +119,9 @@ def import_helper(path: Path, suffixes: List) -> None:
         for suffix in suffixes:
             so = Path(str(stem) + suffix)
             logger.debug(f"Looking for {so}")
-            if not so.exists():
+            if not so.is_file():
                 continue
             load_module_by_path(e.name, so)
-            importlib.reload(sys.modules[__name__])
             return
         else:
             logger.debug(f"Give up on {path}")
@@ -147,6 +146,7 @@ def load_module_by_path(module_name: str, path: Path) -> None:
         return
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    sys.modules[module_name] = module
 
 
 def initialize() -> None:
