@@ -12,6 +12,7 @@ import logging
 import platform
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any, List
 
@@ -33,22 +34,24 @@ def get_system_sitepackages() -> List[List[Any]]:
         List of paths.
     """
 
-    def get_sitepackages(interpreter):
-        command = [
-            interpreter,
-            "-c",
-            "import json, site; print(json.dumps(site.getsitepackages()))",
-        ]
-        output = subprocess.check_output(command)
-        return json.loads(output.decode())
-
-    def get_suffixes(interpreter):
-        print_suffixes = [
-            "import json, importlib.machinery",
-            "print(json.dumps(importlib.machinery.EXTENSION_SUFFIXES))",
-        ]
-        command = [interpreter, "-c", ";".join(print_suffixes)]
-        output = subprocess.check_output(command)
+    def get_sitepackages_and_suffixes(interpreter):
+        script = textwrap.dedent(
+            """
+            import importlib
+            import importlib.machinery
+            import json
+            import site
+            print(
+                json.dumps(
+                    {
+                        "sitepackages": site.getsitepackages(),
+                        "suffixes": importlib.machinery.EXTENSION_SUFFIXES,
+                    }
+                )
+            )
+            """
+        )
+        output = subprocess.check_output([interpreter], input=script.encode())
         return json.loads(output.decode())
 
     majorver, minorver, _ = platform.python_version_tuple()
@@ -62,13 +65,11 @@ def get_system_sitepackages() -> List[List[Any]]:
     for interpreter in interpreters:
         if not Path(interpreter).is_file():
             continue
-        sitepackages = get_sitepackages(interpreter)
-        suffixes = get_suffixes(interpreter)
-        formatted_list = "\n".join(sitepackages + suffixes)
+        sitepackages_suffixes = get_sitepackages_and_suffixes(interpreter)
         logger.debug(
-            f"Collected sitepackages, suffixes for {interpreter}:\n{formatted_list}"
+            f"Collected sitepackages, suffixes for {interpreter}:\n{sitepackages_suffixes}"
         )
-        result.append([sitepackages, suffixes])
+        result.append(sitepackages_suffixes)
     return result
 
 
@@ -152,8 +153,10 @@ def initialize() -> None:
     """
     Initializes the shim. Tries to load system RPM module and replace itself with it.
     """
-    for site_packages, suffixes in get_system_sitepackages():
-        for site in site_packages:
+    for i in get_system_sitepackages():
+        sitepackages = i['sitepackages']
+        suffixes = i['suffixes']
+        for site in sitepackages:
             logger.debug(f"Trying {site}")
             try:
                 if try_path(site, suffixes):
