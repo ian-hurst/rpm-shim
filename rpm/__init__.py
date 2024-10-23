@@ -13,7 +13,7 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, List
+from typing import List
 
 PROJECT_NAME = "rpm-shim"
 MODULE_NAME = "rpm"
@@ -25,7 +25,7 @@ class ShimAlreadyInitializingError(Exception):
     pass
 
 
-def get_system_sitepackages() -> List[List[Any]]:
+def get_system_sitepackages() -> List[str]:
     """
     Gets a list of sitepackages directories of system Python interpreter(s).
 
