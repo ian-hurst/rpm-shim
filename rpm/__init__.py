@@ -76,9 +76,6 @@ def try_path(path: str) -> bool:
         # sanity check
         confdir = sys.modules[__name__].expandMacro("%getconfdir")
         return Path(confdir).is_dir()
-    except Exception as e:
-        logger.debug(e)
-        raise
     finally:
         del sys.path[0]
     return False
