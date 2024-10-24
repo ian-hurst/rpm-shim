@@ -111,6 +111,8 @@ def reload_module(path: Path, suffixes: List[str]) -> None:
         try:
             importlib.reload(sys.modules[__name__])
         except ModuleNotFoundError as e:
+            if e.name is None:
+                raise
             if e.name in attempted_modules:
                 logger.debug(f"Already tried {e.name} in {path}, giving up")
                 raise
