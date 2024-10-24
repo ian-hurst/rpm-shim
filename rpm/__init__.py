@@ -10,11 +10,12 @@ import importlib.util
 import json
 import logging
 import platform
+import pprint
 import subprocess
 import sys
 import textwrap
 from pathlib import Path
-from typing import Any, List
+from typing import Dict, List
 
 PROJECT_NAME = "rpm-shim"
 MODULE_NAME = "rpm"
@@ -26,7 +27,7 @@ class ShimAlreadyInitializingError(Exception):
     pass
 
 
-def get_system_sitepackages() -> List[List[Any]]:
+def get_system_sitepackages_and_suffixes() -> List[Dict[str, List[str]]]:
     """
     Gets a list of sitepackages directories of system Python interpreter(s).
 
@@ -65,11 +66,12 @@ def get_system_sitepackages() -> List[List[Any]]:
     for interpreter in interpreters:
         if not Path(interpreter).is_file():
             continue
-        sitepackages_suffixes = get_sitepackages_and_suffixes(interpreter)
+        sitepackages_and_suffixes = get_sitepackages_and_suffixes(interpreter)
         logger.debug(
-            f"Collected sitepackages, suffixes for {interpreter}:\n{sitepackages_suffixes}"
+            f"Collected sitepackages and extension suffixes for {interpreter}:\n"
+            + pprint.pformat(sitepackages_and_suffixes)
         )
-        result.append(sitepackages_suffixes)
+        result.append(sitepackages_and_suffixes)
     return result
 
 
@@ -85,7 +87,7 @@ def try_path(path: str, suffixes: List[str]) -> bool:
         return False
     sys.path.insert(0, path)
     try:
-        import_helper(module_path, suffixes)
+        reload_module(module_path, suffixes)
         # sanity check
         confdir = sys.modules[__name__].expandMacro("%getconfdir")
         return Path(confdir).is_dir()
@@ -94,17 +96,15 @@ def try_path(path: str, suffixes: List[str]) -> bool:
     return False
 
 
-def import_helper(path: Path, suffixes: List) -> None:
+def reload_module(path: Path, suffixes: List[str]) -> None:
     """
-    Helps import rpm in cases where the shared object file extensions include the python
-    interpreter version
+    Reloads the `rpm` module. In case some of the required binary submodules fail to import,
+    tries to import them directly by path using valid extension suffixes.
 
     Args:
-        path (Path): the absolute path to the rpm module
-        suffixes (List): a list of extension suffixes valid for the python interpreter
-
-    Returns:
-        None
+        path: Absolute path to the `rpm` module.
+        suffixes: List of extension suffixes valid for the Python interpreter associated
+                  with the path.
     """
     attempted_modules = []
     while True:
@@ -117,7 +117,7 @@ def import_helper(path: Path, suffixes: List) -> None:
             attempted_modules.append(e.name)
             logger.debug(
                 f"Module {e.name} not found in {path}, "
-                "looking for any binary extensions with valid suffixes"
+                "looking for alternative filenames trying valid extension suffixes"
             )
             try_import_binary_extension(path, e.name, suffixes)
         else:
@@ -125,47 +125,53 @@ def import_helper(path: Path, suffixes: List) -> None:
             return
 
 
-def try_import_binary_extension(path: Path, module: str, suffixes: List) -> bool:
+def try_import_binary_extension(path: Path, module: str, suffixes: List[str]) -> bool:
     """
-    Finds and imports a binary extension in {path} matching {module} and {suffixes}
+    Tries to find and import a binary extension in the specified path based on name
+    and valid extension suffixes.
 
     Args:
-        path (Path): the path to a module, i.e. /usr/lib64/python3.9/site-packages/rpm/
-        module (str): the name of a module to import, i.e. 'rpm._rpm'
-        suffixes (List[str]): a list of extension suffixes to check for (see
-                              importlib.machinery.EXTENSION_SUFFIXES)
+        path: Path to the module, e.g. /usr/lib64/python3.9/site-packages/rpm/
+        module: Name of the module to import, e.g. `rpm._rpm`
+        suffixes: List of extension suffixes to check for
+                  (see `importlib.machinery.EXTENSION_SUFFIXES`).
 
     Returns:
-        True if the module was loaded, False otherwise
+        True if the module was loaded, False otherwise.
     """
-    # get the child module name, i.e. just '_rpm' from 'rpm._rpm'
-    child = module.rpartition(".")[-1]
+    # get the submodule module name, e.g. just '_rpm' from 'rpm._rpm'
+    submodule = module.rpartition(".")[-1]
     for suffix in suffixes:
-        # a file named {child}{suffix} may exist in {path}, i.e.
+        # a file named {submodule}{suffix} may exist in {path}, e.g.:
         #
         # /usr/lib64/python3.9/site-packages/rpm/_rpm.cpython-39-x86_64-linux-gnu.so
         #
         # if so we'll try loading it as rpm._rpm
-        so = path / f"{child}{suffix}"
+        so = path / f"{submodule}{suffix}"
         if not so.is_file():
             logger.debug(f"{so} isn't a file, ignoring")
             continue
         if load_module_by_path(module, so):
             return True
     else:
-        logger.debug(f"No suffixes matched {child} found in {path}, giving up")
+        logger.debug(
+            f"No combination of {submodule} and valid suffixes found in {path}, giving up"
+        )
         return False
 
 
 def load_module_by_path(module_name: str, path: Path) -> bool:
     """
-    Imports a python module by file path
+    Imports a Python module by path.
 
     Args:
-        module_name (str): name of the module to import
-        path (Path): absolute path to the module to import
+        module_name: Name of the module to import.
+        path: Absolute path to the module to import.
+
+    Returns:
+        True if the import succeeded, otherwise False.
     """
-    logger.debug(f"Try loading {module_name} from {path}")
+    logger.debug(f"Trying to load {module_name} from {path}")
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None:
         logger.debug(f"No spec for {module_name} in {path}")
@@ -184,13 +190,11 @@ def initialize() -> None:
     """
     Initializes the shim. Tries to load system RPM module and replace itself with it.
     """
-    for i in get_system_sitepackages():
-        sitepackages = i["sitepackages"]
-        suffixes = i["suffixes"]
-        for site in sitepackages:
-            logger.debug(f"Trying {site}")
+    for entry in get_system_sitepackages_and_suffixes():
+        for path in entry["sitepackages"]:
+            logger.debug(f"Trying {path}")
             try:
-                if try_path(site, suffixes):
+                if try_path(path, entry["suffixes"]):
                     logger.debug("Import successfull")
                     return
             except ShimAlreadyInitializingError:
