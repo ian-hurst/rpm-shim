@@ -119,15 +119,15 @@ def import_helper(path: Path, suffixes: List) -> None:
                 f"Module {e.name} not found in {path}, "
                 "looking for any binary extensions with valid suffixes"
             )
-            try_import_binary_modules(path, e.name, suffixes)
+            try_import_binary_extension(path, e.name, suffixes)
         else:
             logger.debug(f"Reloaded {__name__}")
             return
 
 
-def try_import_binary_modules(path: Path, module: str, suffixes: List) -> bool:
+def try_import_binary_extension(path: Path, module: str, suffixes: List) -> bool:
     """
-    Finds and imports binary modules in {path} matching {name} and {suffixes}
+    Finds and imports a binary extension in {path} matching {module} and {suffixes}
 
     Args:
         path (Path): the path to a module, i.e. /usr/lib64/python3.9/site-packages/rpm/
@@ -148,7 +148,7 @@ def try_import_binary_modules(path: Path, module: str, suffixes: List) -> bool:
         # if so we'll try loading it as rpm._rpm
         so = path / f"{child}{suffix}"
         if not so.is_file():
-            logger.debug(f"{so} exists but isn't a file, ignoring")
+            logger.debug(f"{so} isn't a file, ignoring")
             continue
         if load_module_by_path(module, so):
             return True
